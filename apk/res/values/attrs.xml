@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<declare-styleable name="MMAdView">
+		<attr name="apid" format="string" />
+		<attr name="acid" format="string" />
+		<attr name="ignoreDensityScaling" format="string" />
+		<attr name="age" format="string" />
+		<attr name="gender" format="string" />
+		<attr name="zip" format="string" />
+		<attr name="income" format="string" />
+		<attr name="keywords" format="string" />
+		<attr name="ethnicity" format="string" />
+		<attr name="orientation" format="string" />
+		<attr name="marital" format="string" />
+		<attr name="children" format="string" />
+		<attr name="education" format="string" />
+		<attr name="politics" format="string" />
+		<attr name="height" format="integer" />
+		<attr name="width" format="integer" />
+	</declare-styleable>
+	<declare-styleable name="MMBannerAdView">
+		<attr name="height" />
+		<attr name="width" />
+	</declare-styleable>
+</resources>

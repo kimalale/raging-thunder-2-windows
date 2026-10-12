@@ -1,0 +1,25 @@
+# Build artifacts
+*.o
+*.obj
+*.exe~
+*.pdb
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.suo
+*.user
+*.swp
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+*.log

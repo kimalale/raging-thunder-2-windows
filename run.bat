@@ -1,0 +1,3 @@
+@echo off
+echo Starting Raging Thunder 2 Native Windows Port...
+start RagingThunder2_Windows.exe
