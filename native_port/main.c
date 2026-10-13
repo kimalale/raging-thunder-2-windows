@@ -3,6 +3,7 @@
 #include "gl_wrap.h"
 #include "shims.h"
 #include "audio.h"
+#include "mesh_dump.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +48,7 @@ typedef struct {
     int msaa;        /* MSAA samples, 0 = off */
     int anisotropy;  /* anisotropic filtering level, <= 1 = off */
     int mipmaps;     /* auto-mipmapped trilinear texture filtering */
+    int dump_meshes; /* export 3D meshes + textures to dumps/meshes/ */
 } video_config_t;
 
 static void print_usage(const char *exe) {
@@ -57,6 +59,7 @@ static void print_usage(const char *exe) {
     printf("  --msaa <n>        Multisample anti-aliasing samples: 0, 2, 4, 8 (default 4)\n");
     printf("  --aniso <n>       Anisotropic filtering level: 0-16 (default 16)\n");
     printf("  --no-mipmaps      Keep the original (non-mipmapped) texture filtering\n");
+    printf("  --dump-meshes     Export every 3D mesh drawn (OBJ + TGA) to dumps/meshes/\n");
     printf("In game: F11 or Alt+Enter toggles fullscreen.\n");
 }
 
@@ -67,6 +70,7 @@ static int parse_video_config(int argc, char *argv[], video_config_t *cfg) {
     cfg->msaa = 4;
     cfg->anisotropy = 16;
     cfg->mipmaps = 1;
+    cfg->dump_meshes = 0;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -83,6 +87,8 @@ static int parse_video_config(int argc, char *argv[], video_config_t *cfg) {
             cfg->anisotropy = atoi(argv[++i]);
         } else if (strcmp(arg, "--no-mipmaps") == 0) {
             cfg->mipmaps = 0;
+        } else if (strcmp(arg, "--dump-meshes") == 0) {
+            cfg->dump_meshes = 1;
         } else if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -236,6 +242,9 @@ int main(int argc, char *argv[]) {
     /* Initialize subsystems */
     gl_wrap_init();
     gl_wrap_set_texture_quality(video.mipmaps, video.anisotropy);
+    if (video.dump_meshes) {
+        mesh_dump_init("dumps/meshes");
+    }
     fake_jni_init(swap_buffers_cb);
     shims_init();
     
@@ -528,6 +537,7 @@ int main(int argc, char *argv[]) {
         controller = NULL;
     }
     audio_shutdown();
+    mesh_dump_shutdown();
     OnEvent(&fake_jni, NULL, 0, 0, 0, 0, 0);
     if (OnDestroy) {
         OnDestroy(&fake_jni, NULL);

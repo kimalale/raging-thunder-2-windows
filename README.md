@@ -122,6 +122,17 @@ Press `F11` or `Alt+Enter` in game to toggle fullscreen. Example:
 RagingThunder2_Windows.exe --fullscreen --msaa 8
 ```
 
+### Mesh Dumping
+`--dump-meshes` exports every 3D mesh the game draws to `dumps/meshes/`, the first time it appears on screen. Play through the menus, garage and a few tracks to collect cars and scenery.
+
+| File | Contents |
+| :--- | :--- |
+| `mesh_<hash>.obj` / `.mtl` | Geometry in object space (positions, UVs, normals) with its material |
+| `tex_<hash>.tga` | The mesh's base texture (level 0, RGBA) |
+| `index.csv` | One row per mesh: triangle/vertex counts, texture, first-seen time, view-space position |
+
+Import the OBJ files into Blender (*File → Import → Wavefront*) to inspect them. Meshes are identified by a hash of their vertex and index data, so the same hash can later be used to load replacement models. 2D draws (menus, HUD) and meshes under 8 triangles (particles, sprites) are skipped.
+
 ---
 
 ## Project Structure
@@ -137,6 +148,7 @@ RagingThunder2_Windows.exe --fullscreen --msaa 8
 │   ├── gl_buffers.c / gl_buffers.h  # Buffer ID virtualization & tracking
 │   ├── gl_wrap.c / gl_wrap.h        # cdecl <-> stdcall OpenGL wrapper table
 │   ├── main.c                       # SDL2 window, event loop, and game orchestration
+│   ├── mesh_dump.c / mesh_dump.h    # --dump-meshes OBJ/TGA exporter
 │   └── shims.c / shims.h            # Bionic POSIX libc/libm runtime shims
 ├── saves/                           # Profile, settings, and runtime save files
 ├── build.bat                        # MinGW32 automated build script

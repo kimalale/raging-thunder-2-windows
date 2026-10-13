@@ -23,3 +23,6 @@ Desktop.ini
 
 # Logs
 *.log
+
+# Mesh / texture dumps (--dump-meshes)
+dumps/

@@ -1,5 +1,6 @@
 #include "gl_wrap.h"
 #include "gl_buffers.h"
+#include "mesh_dump.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -152,8 +153,14 @@ static void CDECL wrap_glDeleteTextures(GLsizei n, const GLuint *textures) {
 static void CDECL wrap_glDepthFunc(GLenum func) { glDepthFunc(func); }
 static void CDECL wrap_glDepthMask(GLboolean flag) { glDepthMask(flag); }
 static void CDECL wrap_glDisable(GLenum cap) { glDisable(cap); }
-static void CDECL wrap_glDrawArrays(GLenum mode, GLint first, GLsizei count) { glDrawArrays(mode, first, count); }
-static void CDECL wrap_glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) { glDrawElements(mode, count, type, indices); }
+static void CDECL wrap_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+    if (g_mesh_dump_enabled) mesh_dump_draw_arrays(mode, first, count);
+    glDrawArrays(mode, first, count);
+}
+static void CDECL wrap_glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices) {
+    if (g_mesh_dump_enabled) mesh_dump_draw_elements(mode, count, type, indices);
+    glDrawElements(mode, count, type, indices);
+}
 static void CDECL wrap_glEnable(GLenum cap) { glEnable(cap); }
 static void CDECL wrap_glFinish(void) { glFinish(); }
 static void CDECL wrap_glFlush(void) { glFlush(); }
