@@ -12,6 +12,10 @@
 #define WINDOW_WIDTH  1024
 #define WINDOW_HEIGHT 600
 
+#ifndef GL_MULTISAMPLE
+#define GL_MULTISAMPLE 0x809D
+#endif
+
 /* Android Keycodes used by Polarbit Fuse */
 #define KEY_BACK        4
 #define KEY_DPAD_UP     19
@@ -34,6 +38,74 @@ typedef void (*OnDestroy_fn)(JNIEnv *, jclass);
 
 static SDL_Window *g_window = NULL;
 static SDL_GLContext g_gl_ctx = NULL;
+
+/* Video settings (overridable from the command line) */
+typedef struct {
+    int width;
+    int height;
+    int fullscreen;
+    int msaa;        /* MSAA samples, 0 = off */
+    int anisotropy;  /* anisotropic filtering level, <= 1 = off */
+    int mipmaps;     /* auto-mipmapped trilinear texture filtering */
+} video_config_t;
+
+static void print_usage(const char *exe) {
+    printf("Usage: %s [options]\n", exe);
+    printf("  --width <px>      Window width  (default %d)\n", WINDOW_WIDTH);
+    printf("  --height <px>     Window height (default %d)\n", WINDOW_HEIGHT);
+    printf("  --fullscreen      Start in borderless fullscreen at desktop resolution\n");
+    printf("  --msaa <n>        Multisample anti-aliasing samples: 0, 2, 4, 8 (default 4)\n");
+    printf("  --aniso <n>       Anisotropic filtering level: 0-16 (default 16)\n");
+    printf("  --no-mipmaps      Keep the original (non-mipmapped) texture filtering\n");
+    printf("In game: F11 or Alt+Enter toggles fullscreen.\n");
+}
+
+static int parse_video_config(int argc, char *argv[], video_config_t *cfg) {
+    cfg->width = WINDOW_WIDTH;
+    cfg->height = WINDOW_HEIGHT;
+    cfg->fullscreen = 0;
+    cfg->msaa = 4;
+    cfg->anisotropy = 16;
+    cfg->mipmaps = 1;
+
+    for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        int has_val = (i + 1 < argc);
+        if (strcmp(arg, "--width") == 0 && has_val) {
+            cfg->width = atoi(argv[++i]);
+        } else if (strcmp(arg, "--height") == 0 && has_val) {
+            cfg->height = atoi(argv[++i]);
+        } else if (strcmp(arg, "--fullscreen") == 0) {
+            cfg->fullscreen = 1;
+        } else if (strcmp(arg, "--msaa") == 0 && has_val) {
+            cfg->msaa = atoi(argv[++i]);
+        } else if (strcmp(arg, "--aniso") == 0 && has_val) {
+            cfg->anisotropy = atoi(argv[++i]);
+        } else if (strcmp(arg, "--no-mipmaps") == 0) {
+            cfg->mipmaps = 0;
+        } else if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown or incomplete option: %s\n", arg);
+            print_usage(argv[0]);
+            return 0;
+        }
+    }
+
+    if (cfg->width < 320) cfg->width = 320;
+    if (cfg->height < 240) cfg->height = 240;
+    if (cfg->msaa < 0) cfg->msaa = 0;
+    if (cfg->msaa > 16) cfg->msaa = 16;
+    if (cfg->anisotropy > 16) cfg->anisotropy = 16;
+    return 1;
+}
+
+static void toggle_fullscreen(void) {
+    Uint32 flags = SDL_GetWindowFlags(g_window);
+    int is_full = (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+    SDL_SetWindowFullscreen(g_window, is_full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+}
 
 static void swap_buffers_cb(void) {
     if (g_window) {
@@ -69,6 +141,15 @@ int main(int argc, char *argv[]) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     AddVectoredExceptionHandler(1, crash_handler);
+
+    video_config_t video;
+    if (!parse_video_config(argc, argv, &video)) {
+        return 1;
+    }
+
+    /* Render at true pixel resolution instead of letting Windows
+     * bitmap-stretch the window on high-DPI displays. */
+    SetProcessDPIAware();
     
     printf("====================================================\n");
     printf("   Raging Thunder 2 — Native Windows Recomp/Port    \n");
@@ -100,13 +181,35 @@ int main(int argc, char *argv[]) {
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    if (video.msaa > 0) {
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, video.msaa);
+    }
+    
+    Uint32 window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+    if (video.fullscreen) {
+        window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
     
     g_window = SDL_CreateWindow(
         "Raging Thunder 2",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        WINDOW_WIDTH, WINDOW_HEIGHT,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+        video.width, video.height,
+        window_flags
     );
+    if (!g_window && video.msaa > 0) {
+        /* No multisampled pixel format available: retry without MSAA */
+        fprintf(stderr, "MSAA x%d unavailable (%s), retrying without it\n", video.msaa, SDL_GetError());
+        video.msaa = 0;
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
+        g_window = SDL_CreateWindow(
+            "Raging Thunder 2",
+            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+            video.width, video.height,
+            window_flags
+        );
+    }
     if (!g_window) {
         fprintf(stderr, "Failed to create SDL window: %s\n", SDL_GetError());
         return 1;
@@ -120,8 +223,19 @@ int main(int argc, char *argv[]) {
     
     SDL_GL_SetSwapInterval(1); /* VSync */
     
+    if (video.msaa > 0) {
+        glEnable(GL_MULTISAMPLE);
+    }
+    
+    int surface_w = video.width, surface_h = video.height;
+    SDL_GL_GetDrawableSize(g_window, &surface_w, &surface_h);
+    glViewport(0, 0, surface_w, surface_h);
+    printf("[VIDEO] Render resolution %dx%d%s, MSAA x%d\n",
+           surface_w, surface_h, video.fullscreen ? " (fullscreen)" : "", video.msaa);
+    
     /* Initialize subsystems */
     gl_wrap_init();
+    gl_wrap_set_texture_quality(video.mipmaps, video.anisotropy);
     fake_jni_init(swap_buffers_cb);
     shims_init();
     
@@ -182,7 +296,7 @@ int main(int argc, char *argv[]) {
                (jobject)&audio_placeholder,    (jobject)&egl_placeholder);
     
     /* Set surface dimensions */
-    OnEvent(&fake_jni, NULL, 3, 0, WINDOW_WIDTH, WINDOW_HEIGHT, 0);
+    OnEvent(&fake_jni, NULL, 3, 0, surface_w, surface_h, 0);
     
     /* Call OnCreate with path to APK and save directory */
     const char *apk_path = "raging-thunder-21-0-16.apk";
@@ -224,11 +338,17 @@ int main(int argc, char *argv[]) {
                 running = 0;
             }
             else if (ev.type == SDL_WINDOWEVENT) {
-                if (ev.window.event == SDL_WINDOWEVENT_RESIZED) {
-                    int w = ev.window.data1;
-                    int h = ev.window.data2;
-                    glViewport(0, 0, w, h);
-                    OnEvent(&fake_jni, NULL, 3, 0, w, h, 0);
+                /* SIZE_CHANGED also fires for fullscreen toggles, unlike RESIZED */
+                if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                    int w, h;
+                    SDL_GL_GetDrawableSize(g_window, &w, &h);
+                    if (w != surface_w || h != surface_h) {
+                        surface_w = w;
+                        surface_h = h;
+                        glViewport(0, 0, w, h);
+                        OnEvent(&fake_jni, NULL, 3, 0, w, h, 0);
+                        printf("[VIDEO] Render resolution %dx%d\n", w, h);
+                    }
                 }
             }
             else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
@@ -289,7 +409,16 @@ int main(int argc, char *argv[]) {
                 int pressed = (ev.type == SDL_KEYDOWN) ? 1 : 0;
                 int keycode = 0;
                 
-                switch (ev.key.keysym.sym) {
+                /* F11 / Alt+Enter: toggle fullscreen (not forwarded to the game) */
+                SDL_Keycode sym = ev.key.keysym.sym;
+                if (sym == SDLK_F11 || (sym == SDLK_RETURN && (ev.key.keysym.mod & KMOD_ALT))) {
+                    if (pressed && !ev.key.repeat) {
+                        toggle_fullscreen();
+                    }
+                    continue;
+                }
+                
+                switch (sym) {
                     case SDLK_UP:
                     case SDLK_w:
                         keycode = KEY_DPAD_UP;

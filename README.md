@@ -106,6 +106,22 @@ or:
 RagingThunder2_Windows.exe
 ```
 
+### Video Options
+The game renders natively at whatever resolution the window is, so a larger window or fullscreen gives a true high-resolution image rather than a stretched one.
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `--width <px>` / `--height <px>` | `1024` / `600` | Initial window size |
+| `--fullscreen` | off | Borderless fullscreen at desktop resolution |
+| `--msaa <n>` | `4` | Multisample anti-aliasing samples (`0` disables) |
+| `--aniso <n>` | `16` | Anisotropic filtering level (clamped to the GPU maximum) |
+| `--no-mipmaps` | — | Keep the original non-mipmapped texture filtering |
+
+Press `F11` or `Alt+Enter` in game to toggle fullscreen. Example:
+```cmd
+RagingThunder2_Windows.exe --fullscreen --msaa 8
+```
+
 ---
 
 ## Project Structure
