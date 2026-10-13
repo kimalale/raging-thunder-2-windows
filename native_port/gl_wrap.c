@@ -60,6 +60,55 @@ static PFNGLRENDERBUFFERSTORAGEPROC pfn_glRenderbufferStorage = NULL;
 static PFNGLGENERATEMIPMAPPROC pfn_glGenerateMipmap = NULL;
 
 /* ------------------------------------------------------------- */
+/* TEXTURE QUALITY ENHANCEMENTS                                  */
+/* ------------------------------------------------------------- */
+/* The engine was tuned for phone GPUs and mostly uses plain GL_LINEAR
+ * without mipmaps, which shimmers badly at desktop resolutions. When
+ * enabled, level-0 uploads of 2D textures get auto-generated mipmaps,
+ * GL_LINEAR minification is upgraded to trilinear, and anisotropic
+ * filtering is applied. Render targets (NULL-pixel uploads) and
+ * glCopyTexImage2D textures are left untouched since their contents
+ * change on the GPU and the mip chain would go stale. */
+
+#ifndef GL_GENERATE_MIPMAP
+#define GL_GENERATE_MIPMAP 0x8191
+#endif
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT     0x84FE
+#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
+#endif
+
+#define MAX_TRACKED_TEXTURES 65536
+
+static int g_tex_mipmaps = 0;
+static float g_tex_aniso = 0.0f;
+static unsigned char g_tex_has_mips[MAX_TRACKED_TEXTURES / 8];
+
+static GLuint bound_texture_2d(void) {
+    GLint tex = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
+    return (GLuint)tex;
+}
+
+static int tex_has_mips(GLuint tex) {
+    if (tex == 0 || tex >= MAX_TRACKED_TEXTURES) return 0;
+    return (g_tex_has_mips[tex >> 3] >> (tex & 7)) & 1;
+}
+
+static void tex_set_mips(GLuint tex, int on) {
+    if (tex == 0 || tex >= MAX_TRACKED_TEXTURES) return;
+    if (on) g_tex_has_mips[tex >> 3] |= (unsigned char)(1 << (tex & 7));
+    else    g_tex_has_mips[tex >> 3] &= (unsigned char)~(1 << (tex & 7));
+}
+
+/* Upgrade GL_LINEAR minification to trilinear on textures we mipmapped. */
+static GLint upgrade_min_filter(GLenum target, GLenum pname, GLint param) {
+    if (!g_tex_mipmaps || target != GL_TEXTURE_2D || pname != GL_TEXTURE_MIN_FILTER) return param;
+    if (param == GL_LINEAR && tex_has_mips(bound_texture_2d())) return GL_LINEAR_MIPMAP_LINEAR;
+    return param;
+}
+
+/* ------------------------------------------------------------- */
 /* __cdecl WRAPPERS FOR DESKTOP OPENGL FUNCTIONS                 */
 /* ------------------------------------------------------------- */
 
@@ -70,8 +119,20 @@ static void CDECL wrap_glGetFloatv(GLenum pname, GLfloat *params) { glGetFloatv(
 static void CDECL wrap_glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params) { glGetTexParameterfv(target, pname, params); }
 static void CDECL wrap_glLineWidth(GLfloat width) { glLineWidth(width); }
 static void CDECL wrap_glPolygonOffset(GLfloat factor, GLfloat units) { glPolygonOffset(factor, units); }
-static void CDECL wrap_glTexParameterf(GLenum target, GLenum pname, GLfloat param) { glTexParameterf(target, pname, param); }
-static void CDECL wrap_glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) { glTexParameterfv(target, pname, params); }
+static void CDECL wrap_glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
+    if (pname == GL_TEXTURE_MIN_FILTER) {
+        glTexParameteri(target, pname, upgrade_min_filter(target, pname, (GLint)param));
+        return;
+    }
+    glTexParameterf(target, pname, param);
+}
+static void CDECL wrap_glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) {
+    if (pname == GL_TEXTURE_MIN_FILTER) {
+        glTexParameteri(target, pname, upgrade_min_filter(target, pname, (GLint)params[0]));
+        return;
+    }
+    glTexParameterfv(target, pname, params);
+}
 static void CDECL wrap_glBindTexture(GLenum target, GLuint texture) { glBindTexture(target, texture); }
 static void CDECL wrap_glBlendFunc(GLenum sfactor, GLenum dfactor) { glBlendFunc(sfactor, dfactor); }
 static void CDECL wrap_glClear(GLbitfield mask) { glClear(mask); }
@@ -84,7 +145,10 @@ static void CDECL wrap_glCopyTexSubImage2D(GLenum target, GLint level, GLint xof
     glCopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
 }
 static void CDECL wrap_glCullFace(GLenum mode) { glCullFace(mode); }
-static void CDECL wrap_glDeleteTextures(GLsizei n, const GLuint *textures) { glDeleteTextures(n, textures); }
+static void CDECL wrap_glDeleteTextures(GLsizei n, const GLuint *textures) {
+    for (GLsizei i = 0; i < n; i++) tex_set_mips(textures[i], 0);
+    glDeleteTextures(n, textures);
+}
 static void CDECL wrap_glDepthFunc(GLenum func) { glDepthFunc(func); }
 static void CDECL wrap_glDepthMask(GLboolean flag) { glDepthMask(flag); }
 static void CDECL wrap_glDisable(GLenum cap) { glDisable(cap); }
@@ -126,10 +190,45 @@ static void CDECL wrap_glStencilFunc(GLenum func, GLint ref, GLuint mask) { glSt
 static void CDECL wrap_glStencilMask(GLuint mask) { glStencilMask(mask); }
 static void CDECL wrap_glStencilOp(GLenum fail, GLenum zfail, GLenum zpass) { glStencilOp(fail, zfail, zpass); }
 static void CDECL wrap_glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels) {
+    if (!g_tex_mipmaps || target != GL_TEXTURE_2D || level != 0) {
+        glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
+        return;
+    }
+
+    GLuint tex = bound_texture_2d();
+    int enhance = (pixels != NULL);
+    int had_mips = tex_has_mips(tex);
+
+    if (enhance) {
+        glTexParameteri(target, GL_GENERATE_MIPMAP, GL_TRUE);
+    } else if (had_mips) {
+        /* Texture id is being reused as a render target: undo our changes */
+        glTexParameteri(target, GL_GENERATE_MIPMAP, GL_FALSE);
+    }
+
     glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
+    tex_set_mips(tex, enhance);
+
+    GLint min_filter = 0;
+    glGetTexParameteriv(target, GL_TEXTURE_MIN_FILTER, &min_filter);
+    if (enhance) {
+        if (min_filter == GL_LINEAR) glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        if (g_tex_aniso > 1.0f) glTexParameterf(target, GL_TEXTURE_MAX_ANISOTROPY_EXT, g_tex_aniso);
+    } else if (had_mips) {
+        if (min_filter == GL_LINEAR_MIPMAP_LINEAR) glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        if (g_tex_aniso > 1.0f) glTexParameterf(target, GL_TEXTURE_MAX_ANISOTROPY_EXT, 1.0f);
+    }
 }
-static void CDECL wrap_glTexParameteri(GLenum target, GLenum pname, GLint param) { glTexParameteri(target, pname, param); }
-static void CDECL wrap_glTexParameteriv(GLenum target, GLenum pname, const GLint *params) { glTexParameteriv(target, pname, params); }
+static void CDECL wrap_glTexParameteri(GLenum target, GLenum pname, GLint param) {
+    glTexParameteri(target, pname, upgrade_min_filter(target, pname, param));
+}
+static void CDECL wrap_glTexParameteriv(GLenum target, GLenum pname, const GLint *params) {
+    if (pname == GL_TEXTURE_MIN_FILTER) {
+        glTexParameteri(target, pname, upgrade_min_filter(target, pname, params[0]));
+        return;
+    }
+    glTexParameteriv(target, pname, params);
+}
 static void CDECL wrap_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels) {
     glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
 }
@@ -365,10 +464,10 @@ static void CDECL wrap_glMultiTexCoord4x(GLenum target, GLfixed s, GLfixed t, GL
     wrap_glMultiTexCoord4f(target, FIX2FLT(s), FIX2FLT(t), FIX2FLT(r), FIX2FLT(q));
 }
 static void CDECL wrap_glTexParameterx(GLenum target, GLenum pname, GLfixed param) {
-    glTexParameteri(target, pname, param);
+    wrap_glTexParameteri(target, pname, param);
 }
 static void CDECL wrap_glTexParameterxv(GLenum target, GLenum pname, const GLfixed *params) {
-    glTexParameteriv(target, pname, (const GLint*)params);
+    wrap_glTexParameteriv(target, pname, (const GLint*)params);
 }
 static void CDECL wrap_glGetFixedv(GLenum pname, GLfixed *params) {
     float f[16];
@@ -460,6 +559,30 @@ void gl_wrap_init(void) {
     
     pfn_glGenerateMipmap = (PFNGLGENERATEMIPMAPPROC)SDL_GL_GetProcAddress("glGenerateMipmap");
     if (!pfn_glGenerateMipmap) pfn_glGenerateMipmap = (PFNGLGENERATEMIPMAPPROC)SDL_GL_GetProcAddress("glGenerateMipmapEXT");
+}
+
+void gl_wrap_set_texture_quality(int mipmaps, int anisotropy) {
+    const char *version = (const char *)glGetString(GL_VERSION);
+    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+    int major = 0, minor = 0;
+    if (version) sscanf(version, "%d.%d", &major, &minor);
+
+    /* GL_GENERATE_MIPMAP is core since OpenGL 1.4 */
+    g_tex_mipmaps = mipmaps && (major > 1 || (major == 1 && minor >= 4));
+    if (mipmaps && !g_tex_mipmaps) {
+        printf("[GL] OpenGL %s lacks automatic mipmap generation; texture enhancements disabled\n", version ? version : "?");
+    }
+
+    g_tex_aniso = 0.0f;
+    if (g_tex_mipmaps && anisotropy > 1 && extensions && strstr(extensions, "GL_EXT_texture_filter_anisotropic")) {
+        GLfloat max_aniso = 1.0f;
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_aniso);
+        g_tex_aniso = (float)anisotropy < max_aniso ? (float)anisotropy : max_aniso;
+    }
+
+    printf("[GL] Texture filtering: %s, anisotropy %.0fx\n",
+           g_tex_mipmaps ? "trilinear (auto mipmaps)" : "original",
+           g_tex_aniso > 1.0f ? g_tex_aniso : 1.0f);
 }
 
 /* Dispatch lookup table */
